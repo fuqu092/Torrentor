@@ -7,28 +7,35 @@
 #include <thread>
 #include <string.h>
 #include <map>
+#include <set>
 #include <mutex>
 
 #define PORT 8080
 
-std::map<uint8_t, int> database;
+std::map<uint8_t, std::set<uint8_t>> database;
 std::mutex db_mutex;
 
-void handle_file_upload(const uint8_t filename){
+void handle_file_upload(const uint8_t filename, const uint8_t port){
     std::lock_guard<std::mutex> lock(db_mutex);
-    database[filename] = 1;
+    database[filename].insert(port);
     return ;
 }
 
-void handle_file_delete(const uint8_t filename){
+void handle_file_delete(const uint8_t filename, const uint8_t port){
     std::lock_guard<std::mutex> lock(db_mutex);
-    database[filename] = 0;
+    if(database[filename].find(port) != database[filename].end())
+        database[filename].erase(database[filename].find(port));
     return ;
 }
 
 void handle_file_download(const uint8_t filename, int socket){
-    std::lock_guard<std::mutex> lock(db_mutex);
-    send(socket, &database[filename], sizeof(database[filename]), 0);
+    std::vector<uint8_t> buffer;
+    {
+        std::lock_guard<std::mutex> lock(db_mutex);
+        for(auto i:database[filename])
+            buffer.push_back(i);
+    }
+    send(socket, buffer.data(), buffer.size(), 0);
     return ;
 }
 
@@ -36,20 +43,15 @@ void handle_request(int* socket_ptr){
     char* error_msg = "Error";
     int socket = *socket_ptr;
     free(socket_ptr);
-    std::vector<uint8_t> buffer(6);
-    int bytes_read = read(socket, buffer.data(), 6);
-    if(bytes_read < 6){
-        send(socket, error_msg, strlen(error_msg), 0);
-        close(socket);
-        return ;
-    }
+    std::vector<uint8_t> buffer(20);
+    int bytes_read = read(socket, buffer.data(), 20);
     Message curr = Message::deserialize(buffer);
     switch(curr.type){
         case 0:
-            handle_file_upload(curr.payload[0]);
+            handle_file_upload(curr.payload[0], curr.payload[1]);
             break;
         case 1:
-            handle_file_delete(curr.payload[0]);
+            handle_file_delete(curr.payload[0], curr.payload[1]);
             break;
         case 2:
             handle_file_download(curr.payload[0], socket);

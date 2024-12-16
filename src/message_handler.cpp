@@ -1,16 +1,18 @@
 #include "message_handler.h"
 #include <cstring>
 
-Message generate_upload_file_message(const uint8_t filename){
-    std::vector<uint8_t> payload(1);
+Message generate_upload_file_message(const uint8_t filename, const uint8_t port){
+    std::vector<uint8_t> payload(2);
     std::memcpy(payload.data(), &filename, sizeof(filename));
+    std::memcpy(payload.data()+1, &port, sizeof(port));
     Message m(0, payload);
     return m;
 }
 
-Message generate_delete_file_message(const uint8_t filename){
-    std::vector<uint8_t> payload(1);
+Message generate_delete_file_message(const uint8_t filename, const uint8_t port){
+    std::vector<uint8_t> payload(2);
     std::memcpy(payload.data(), &filename, sizeof(filename));
+    std::memcpy(payload.data()+1, &port, sizeof(port));
     Message m(1, payload);
     return m;
 }
