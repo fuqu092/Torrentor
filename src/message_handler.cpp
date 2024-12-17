@@ -1,24 +1,24 @@
 #include "message_handler.h"
 #include <cstring>
 
-Message generate_upload_file_message(const uint8_t filename, const uint8_t port){
-    std::vector<uint8_t> payload(2);
+Message generate_upload_file_message(const uint32_t filename, const uint32_t port){
+    std::vector<uint8_t> payload(8);
     std::memcpy(payload.data(), &filename, sizeof(filename));
-    std::memcpy(payload.data()+1, &port, sizeof(port));
+    std::memcpy(payload.data()+4, &port, sizeof(port));
     Message m(0, payload);
     return m;
 }
 
-Message generate_delete_file_message(const uint8_t filename, const uint8_t port){
-    std::vector<uint8_t> payload(2);
+Message generate_delete_file_message(const uint32_t filename, const uint32_t port){
+    std::vector<uint8_t> payload(8);
     std::memcpy(payload.data(), &filename, sizeof(filename));
-    std::memcpy(payload.data()+1, &port, sizeof(port));
+    std::memcpy(payload.data()+4, &port, sizeof(port));
     Message m(1, payload);
     return m;
 }
 
-Message generate_download_file_message(const uint8_t filename){
-    std::vector<uint8_t> payload(1);
+Message generate_download_file_message(const uint32_t filename){
+    std::vector<uint8_t> payload(4);
     std::memcpy(payload.data(), &filename, sizeof(filename));
     Message m(2, payload);
     return m;
@@ -29,8 +29,8 @@ Message generate_handshake_message(){
     return m;
 }
 
-Message generate_file_request_message(const uint8_t filename){
-    std::vector<uint8_t> payload(1);
+Message generate_file_request_message(const uint32_t filename){
+    std::vector<uint8_t> payload(4);
     std::memcpy(payload.data(), &filename, sizeof(filename));
     Message m(4, payload);
     return m;

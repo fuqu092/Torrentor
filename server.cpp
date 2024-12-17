@@ -9,58 +9,107 @@
 #include <map>
 #include <set>
 #include <mutex>
+#include <iostream>
+#include <cstring>
 
 #define PORT 8080
 
-std::map<uint8_t, std::set<uint8_t>> database;
+std::map<uint32_t, std::set<uint32_t>> database;
 std::mutex db_mutex;
 
-void handle_file_upload(const uint8_t filename, const uint8_t port){
+int success = 1;
+int error = 0;
+
+uint32_t convert(std::vector<uint8_t>& payload, int j){
+    uint32_t res = 0;
+    for(int i=0;i<4;i++)
+        res = res | (payload[i+j] << (i * 8));
+    
+    return res;
+}
+
+void handle_file_upload(Message& m, int socket){
+    uint32_t filename = convert(m.payload, 0);
+    uint32_t port = convert(m.payload, 4);
+
     std::lock_guard<std::mutex> lock(db_mutex);
     database[filename].insert(port);
+
+    send(socket, &success, sizeof(success), 0);
+
     return ;
 }
 
-void handle_file_delete(const uint8_t filename, const uint8_t port){
+void handle_file_delete(Message& m, int socket){
+    uint32_t filename = convert(m.payload, 0);
+    uint32_t port = convert(m.payload, 4);
+
     std::lock_guard<std::mutex> lock(db_mutex);
     if(database[filename].find(port) != database[filename].end())
         database[filename].erase(database[filename].find(port));
+
+    send(socket, &success, sizeof(success), 0);
+
     return ;
 }
 
-void handle_file_download(const uint8_t filename, int socket){
+void handle_file_download(Message& m, int socket){
+    uint32_t filename = convert(m.payload, 0);
+
     std::vector<uint8_t> buffer;
+    int j = 0;
     {
+        size_t required_size = 4 * database[filename].size();
+        buffer.resize(required_size);
         std::lock_guard<std::mutex> lock(db_mutex);
-        for(auto i:database[filename])
-            buffer.push_back(i);
+        for(auto i:database[filename]){
+            std::memcpy(buffer.data() + 4 * j, &i, sizeof(i));
+            j++;
+        }
     }
+    
+    if(buffer.size() == 0){
+        send(socket, &error, sizeof(error), 0);
+        return ;
+    }
+
     send(socket, buffer.data(), buffer.size(), 0);
+    // send(socket, &success, sizeof(success), 0);
+
     return ;
 }
 
-void handle_request(int* socket_ptr){
-    char* error_msg = "Error";
-    int socket = *socket_ptr;
-    free(socket_ptr);
+void handle_request(int socket){
     std::vector<uint8_t> buffer(20);
     int bytes_read = read(socket, buffer.data(), 20);
+    buffer.resize(bytes_read);
     Message curr = Message::deserialize(buffer);
-    switch(curr.type){
+
+    int type = static_cast<int>(curr.type);
+    
+    switch(type){
         case 0:
-            handle_file_upload(curr.payload[0], curr.payload[1]);
+            std::cout<<"Recieved a request for file upload"<<std::endl;
+            handle_file_upload(curr, socket);
+            std::cout<<"Completed request for file upload"<<std::endl;
             break;
         case 1:
-            handle_file_delete(curr.payload[0], curr.payload[1]);
+            std::cout<<"Recieved a request for file delete"<<std::endl;
+            handle_file_delete(curr, socket);
+            std::cout<<"Completed request for file delete"<<std::endl;
             break;
         case 2:
-            handle_file_download(curr.payload[0], socket);
+            std::cout<<"Recieved a request for file download"<<std::endl;
+            handle_file_download(curr, socket);
+            std::cout<<"Completed request for file download"<<std::endl;    
             break;
         default:
-            send(socket, error_msg, strlen(error_msg), 0);
+            send(socket, &error, sizeof(error), 0);
             break;
     }
+
     close(socket);
+
     return ;
 }
 
@@ -95,16 +144,18 @@ int main(){
         exit(EXIT_FAILURE);
     }
 
+    std::cout<<"Server Started"<<std::endl;
+
     while(true){
         int new_socket = accept(server_fd, (struct sockaddr*) &address, &address_len);
         if(new_socket < 0){
             perror("Accept Failed!!!");
             exit(EXIT_FAILURE);
         }
-        
-        int* socket_ptr = &new_socket;
-        std::thread t(handle_request, socket_ptr);
+
+        std::thread t(handle_request, new_socket);
         t.detach();
     }
+
     return 0;
 }
