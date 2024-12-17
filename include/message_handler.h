@@ -24,3 +24,5 @@ Message generate_unchoke_message();
 Message generate_piece_request_message(const uint32_t piece_index);
 
 Message generate_piece_message(const uint32_t piece_index, const std::vector<uint8_t>& content = {});
+
+Message generate_close_message();

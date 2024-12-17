@@ -75,3 +75,8 @@ Message generate_piece_message(const uint32_t piece_index, const std::vector<uin
     Message m(11, payload);
     return m;
 }
+
+Message generate_close_message(){
+    Message m(13);
+    return m;
+}
