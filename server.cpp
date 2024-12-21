@@ -1,4 +1,5 @@
 #include "message_handler.h"
+#include "helper_functions.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -74,7 +75,6 @@ void handle_file_download(Message& m, int socket){
     }
 
     send(socket, buffer.data(), buffer.size(), 0);
-    // send(socket, &success, sizeof(success), 0);
 
     return ;
 }

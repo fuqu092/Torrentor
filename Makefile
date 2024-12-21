@@ -1,12 +1,17 @@
-# Compiler
-CXX = g++
-
-# Compiler flags
-CXXFLAGS = -O3 -fopenmp -Iinclude
-
-# Target executables
-CLIENT_TARGET = client
-SERVER_TARGET = server
+# Compiler Selection (Platform-dependent)
+ifeq ($(OS),Windows_NT)
+  # For Windows (using MinGW)
+  CXX = g++ # Change to 'x86_64-w64-mingw32-g++' if you want cross-compile for Windows on Linux
+  CXXFLAGS = -O3 -fopenmp -Iinclude -D_WIN32 # Define Windows-specific flags
+  CLIENT_TARGET = client.exe
+  SERVER_TARGET = server.exe
+else
+  # For Linux (Default)
+  CXX = g++
+  CXXFLAGS = -O3 -fopenmp -Iinclude
+  CLIENT_TARGET = client
+  SERVER_TARGET = server
+endif
 
 # Source files
 CLIENT_SRC = client.cpp src/message.cpp src/message_handler.cpp
