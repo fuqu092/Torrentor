@@ -14,8 +14,8 @@ else
 endif
 
 # Source files
-CLIENT_SRC = client.cpp src/message.cpp src/message_handler.cpp
-SERVER_SRC = server.cpp src/message.cpp src/message_handler.cpp
+CLIENT_SRC = client.cpp src/message.cpp src/message_handler.cpp src/helper_functions.cpp
+SERVER_SRC = server.cpp src/message.cpp src/message_handler.cpp src/helper_functions.cpp
 
 # Object files
 CLIENT_OBJ = $(CLIENT_SRC:.cpp=.o)

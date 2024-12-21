@@ -2,18 +2,11 @@
 #include "helper_functions.h"
 #include <ext/pb_ds/assoc_container.hpp>
 #include <ext/pb_ds/tree_policy.hpp>
-#include <iostream>
-#include <thread>
-#include <sys/socket.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <map>
-#include <cstring>
+#include <iostream>
+#include <thread>
 #include <mutex>
-#include <set>
-#include <utility>
 
 typedef __gnu_pbds::tree<std::pair<int, int>, __gnu_pbds::null_type, std::greater_equal<std::pair<int,int>>, __gnu_pbds::rb_tree_tag, __gnu_pbds::tree_order_statistics_node_update> ordered_set;
 
@@ -32,32 +25,6 @@ std::mutex uploading_mutex;
 std::mutex uploaders_mutex;
 std::mutex is_choked_mutex;
 std::mutex download_speed_mutex;
-
-uint32_t convert(std::vector<uint8_t>& payload, int j){
-    uint32_t res = 0;
-    for(int i=0;i<4;i++)
-        res = res | (payload[i+j] << (i * 8));
-    
-    return res;
-}
-
-std::vector<uint32_t> get_peer_ports(std::vector<uint8_t>& buffer, int bytes_read){
-    std::vector<uint32_t> peer_ports;
-    for(int i=0;i<bytes_read;i+=4){
-        uint32_t res = 0;
-        for(int j=0;j<4;j++)
-            res = res | (buffer[i+j] << (j * 8));
-        peer_ports.push_back(res);
-    }
-
-    return peer_ports; 
-}
-
-void send_message(Message& m, int socket){
-    std::vector<uint8_t> buffer = m.serialize();
-    send(socket, buffer.data(), buffer.size(), 0);
-    return ;
-}
 
 void upload_file(uint32_t filename, uint32_t port){
     int client_fd = socket(AF_INET, SOCK_STREAM, 0);

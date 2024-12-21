@@ -1,17 +1,14 @@
 #include "message_handler.h"
 #include "helper_functions.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <arpa/inet.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
+#include <iostream>
+#include <unistd.h>
+#include <cstring>
 #include <thread>
-#include <string.h>
+#include <mutex>
 #include <map>
 #include <set>
-#include <mutex>
-#include <iostream>
-#include <cstring>
 
 #define PORT 8080
 
@@ -20,14 +17,6 @@ std::mutex db_mutex;
 
 int success = 1;
 int error = 0;
-
-uint32_t convert(std::vector<uint8_t>& payload, int j){
-    uint32_t res = 0;
-    for(int i=0;i<4;i++)
-        res = res | (payload[i+j] << (i * 8));
-    
-    return res;
-}
 
 void handle_file_upload(Message& m, int socket){
     uint32_t filename = convert(m.payload, 0);

@@ -1,8 +1,6 @@
 #include "message.h"
-#include <cstring>
-#include <arpa/inet.h>
 #include <stdexcept>
-#include <iostream>
+#include <cstring>
 
 Message::Message(const uint8_t type, const std::vector<uint8_t>& payload) : type(type), payload(payload){
     this->len = static_cast<uint32_t>(1 + payload.size());
