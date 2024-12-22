@@ -26,137 +26,14 @@ std::mutex uploaders_mutex;
 std::mutex is_choked_mutex;
 std::mutex download_speed_mutex;
 
-void upload_file(uint32_t filename, uint32_t port){
-    int client_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if(client_fd < 0){
-        perror("Socket Creation Failed!!!");
-        exit(EXIT_FAILURE);
-    }
-
-    struct sockaddr_in server_address;
-    socklen_t server_address_len = sizeof(server_address);
-    server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(8080);
-    server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-    int connect_status = connect(client_fd, (struct sockaddr*) &server_address, server_address_len);
-    if(connect_status < 0){
-        perror("Connection Failed!!!");
-        exit(EXIT_FAILURE);
-    }
-
-    Message m = generate_upload_file_message(filename, port);
-    send_message(m, client_fd);
-
-    int res;
-    int bytes_read = read(client_fd, &res, sizeof(res));
-    
-    if(res == 1){
-        std::lock_guard<std::mutex> lock(uploading_mutex);
-        uploading[filename] = true;
-        std::cout<<"Server communicated about uploading file "<<filename<<std::endl;
-        std::cout<<"Started seeding file: "<<filename<<std::endl;
-    }
-    else
-        std::cout<<"Error in server"<<std::endl;
-
-    close(client_fd);
-
-    return ;
-}
-
-void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int socket, int uploading_id){
-    std::vector<uint8_t> buffer(1024);
-    std::vector<uint8_t> temp;
-
-    Message m = generate_bitfields_message(bitfields);
-    send_message(m, socket);
-
-    int bytes_read = read(socket, buffer.data(), 1024);
-    temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
-    m = Message::deserialize(temp);
-
-    if(static_cast<int>(m.type) == 7){
-        close(socket);
-        return ;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock1(uploaders_mutex);
-        std::lock_guard<std::mutex> lock2(download_speed_mutex);
-        std::lock_guard<std::mutex> lock3(is_choked_mutex);
-
-        uploaders.insert({0, uploading_id});
-        download_speed[uploading_id] = 0;
-        is_choked[uploading_id] = true;
-    }
-
-    while(true){
-        {
-            std::lock_guard<std::mutex> lock(uploading_mutex);
-
-            if(!uploading[filename]){
-                m = generate_close_message();
-                send_message(m, socket);
-                break;
-            }
-        }
-
-        bool check = false;
-
-        {
-            std::lock_guard<std::mutex> lock(is_choked_mutex);
-
-            if(is_choked[uploading_id]){
-                Message m = generate_choke_message();
-                send_message(m, socket);
-                check = true;
-            }
-        }
-
-        if(check){
-            std::this_thread::sleep_for(std::chrono::seconds(time3));
-            continue;
-        }
-
-        m = generate_unchoke_message();
-        send_message(m, socket);
-
-        int bytes_read = read(socket, buffer.data(), 1024);
-        temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
-        m = Message::deserialize(temp);
-
-        if(static_cast<int>(m.type) == 7)
-            break;
-
-        uint32_t piece_index = convert(m.payload, 0);
-        m = generate_piece_message(piece_index);
-        send_message(m, socket);
-
-        {
-            std::lock_guard<std::mutex> lock1(download_speed_mutex);
-            std::lock_guard<std::mutex> lock2(uploaders_mutex);
-
-            uploaders.erase(uploaders.find({download_speed[uploading_id], uploading_id}));
-            download_speed[uploading_id]++;
-            uploaders.insert({download_speed[uploading_id], uploading_id});
-        }
-    }
-
-    {
-        std::lock_guard<std::mutex> lock1(uploaders_mutex);
-        std::lock_guard<std::mutex> lock2(download_speed_mutex);
-        std::lock_guard<std::mutex> lock3(is_choked_mutex);
-
-        uploaders.erase(uploaders.find({download_speed[uploading_id], uploading_id}));
-        download_speed.erase(download_speed.find(uploading_id));
-        is_choked.erase(is_choked.find(uploading_id));
-    }
-
-    close(socket);
-
-    return ;
-}
+void seed(uint32_t port);
+void choking_protocol();
+void optimistic_unchoking_protocol();
+void upload_file(uint32_t filename, uint32_t port);
+void delete_file(uint32_t filename, uint32_t port);
+void download_file(uint32_t filename);
+void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int socket, int uploading_id);
+void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex, uint32_t filename, uint32_t port);
 
 void seed(uint32_t port){
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -201,18 +78,40 @@ void seed(uint32_t port){
 
         int bytes_read = read(new_socket, buffer.data(), 1024);
         std::vector<std::uint8_t> temp(buffer.begin(), buffer.begin() + bytes_read);
+        bool check = validate_message(temp);
+        if(!check){
+            Message m = generate_close_message();
+            send_message(m, new_socket);
+            close(new_socket);
+            continue;
+        }
         Message m = Message::deserialize(temp);
+        if(static_cast<int> (m.type) == 12){
+            close(new_socket);
+            continue;
+        }
 
         m = generate_handshake_message();
         send_message(m, new_socket);
 
         bytes_read = read(new_socket, buffer.data(), 1024);
         temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
+        check = validate_message(temp);
+        if(!check){
+            m = generate_close_message();
+            send_message(m, new_socket);
+            close(new_socket);
+            continue;
+        }
         m = Message::deserialize(temp);
+        if(static_cast<int> (m.type) == 12){
+            close(new_socket);
+            continue;
+        }
 
         uint32_t filename = convert(m.payload, 0);
 
-        bool check = false;
+        check = false;
 
         {
             std::lock_guard<std::mutex> lock(uploading_mutex);
@@ -232,6 +131,84 @@ void seed(uint32_t port){
     }
 
     close(server_fd);
+
+    return ;
+}
+
+void choking_protocol(){
+    while(true){
+        {
+            std::lock_guard<std::mutex> lock(download_speed_mutex);
+            for(auto i:download_speed){
+                std::lock_guard<std::mutex> lock1(uploaders_mutex);
+                std::lock_guard<std::mutex> lock2(is_choked_mutex);
+
+                if(uploaders.order_of_key({i.second, i.first}) < max_unchoked)
+                    is_choked[i.first] = false;
+                else
+                    is_choked[i.first] = true;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(time1));
+    }
+
+    return ;
+}
+
+void optimistic_unchoking_protocol(){
+    while(true){
+        {
+            std::lock_guard<std::mutex> lock(is_choked_mutex);
+            for(auto i:is_choked){
+                if(i.second == true){
+                    i.second = false;
+                    break;
+                }
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(time2));
+    }
+
+    return ;
+}
+
+void upload_file(uint32_t filename, uint32_t port){
+    int client_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if(client_fd < 0){
+        perror("Socket Creation Failed!!!");
+        exit(EXIT_FAILURE);
+    }
+
+    struct sockaddr_in server_address;
+    socklen_t server_address_len = sizeof(server_address);
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(8080);
+    server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    int connect_status = connect(client_fd, (struct sockaddr*) &server_address, server_address_len);
+    if(connect_status < 0){
+        perror("Connection Failed!!!");
+        exit(EXIT_FAILURE);
+    }
+
+    Message m = generate_upload_file_message(filename, port);
+    send_message(m, client_fd);
+
+    int res;
+    int bytes_read = read(client_fd, &res, sizeof(res));
+    
+    if(res == 1){
+        std::lock_guard<std::mutex> lock(uploading_mutex);
+        uploading[filename] = true;
+        std::cout<<"Server communicated about uploading file "<<filename<<std::endl;
+        std::cout<<"Started seeding file: "<<filename<<std::endl;
+    }
+    else if(res == 2)
+        std::cout<<"Corrupt message sent"<<std::endl;
+    else
+        std::cout<<"Error in server"<<std::endl;
+
+    close(client_fd);
 
     return ;
 }
@@ -267,123 +244,13 @@ void delete_file(uint32_t filename, uint32_t port){
         std::cout<<"Server communicated about not uploading file "<<filename<<std::endl;
         std::cout<<"Stopped seeding file: "<<filename<<std::endl;
     }
+    else if(res == 2)
+        std::cout<<"Corrupt message sent"<<std::endl;
     else
         std::cout<<"Error in server"<<std::endl;
 
     close(client_fd);
 
-    return ;
-}
-
-void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex, uint32_t filename, uint32_t port){
-    int new_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if(new_socket < 0){
-        perror("Socket Creation Failed!!!");
-        exit(EXIT_FAILURE);
-    }
-
-    struct sockaddr_in server_address;
-    socklen_t server_address_len = sizeof(server_address);
-    server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(port);
-    server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-    int connect_status = connect(new_socket, (struct sockaddr*) &server_address, server_address_len);
-    if(connect_status < 0){
-        perror("Connection Failed!!!");
-        exit(EXIT_FAILURE);
-    }
-
-    std::vector<uint8_t> buffer(1024);
-    std::vector<std::uint8_t> temp;
-
-    Message m = generate_handshake_message();
-    send_message(m, new_socket);
-
-    int bytes_read = read(new_socket, buffer.data(), 1024);
-    temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
-    m = Message::deserialize(temp);
-
-    m = generate_file_request_message(filename);
-    send_message(m, new_socket);
-
-    bytes_read = read(new_socket, buffer.data(), 1024);
-    temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
-    m = Message::deserialize(temp);
-
-    if(static_cast<int> (m.type) == 13){
-        close(new_socket);
-        return ;
-    }
-
-    std::vector<uint8_t> peer_bitfields = m.payload;
-
-    bool check = false;
-
-    for(int i=0;i<bitfields.size();i++){
-        std::lock_guard<std::mutex> lock(file_mutex);
-        if(static_cast<int> (bitfields[i]) == 0 && static_cast<int> (peer_bitfields[i]) == 1){
-            check = true;
-            break;
-        }
-    }
-
-    if(check){
-        m = generate_interested_message();
-        send_message(m, new_socket);
-    }
-    else{
-        m = generate_not_interested_message();
-        send_message(m, new_socket);
-        close(new_socket);
-        return ;
-    }
-    
-    while(true){
-
-        int bytes_read = read(new_socket, buffer.data(), 1024);
-        temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
-        m = Message::deserialize(temp);
-
-        if(static_cast<int> (m.type) == 13)
-            break;
-
-        if(static_cast<int> (m.type) == 8)
-            continue;
-
-        uint32_t piece_index = -1;
-
-        for(int i=0;i<bitfields.size();i++){
-            std::lock_guard<std::mutex> lock(file_mutex);
-            if(static_cast<int> (bitfields[i]) == 0 && static_cast<int> (peer_bitfields[i]) == 1){
-                piece_index = i;
-                bitfields[i] = 2;
-                break;
-            }
-        }
-
-        if(piece_index == (uint32_t)-1){
-            m = generate_not_interested_message();
-            send_message(m, new_socket);
-            break;
-        }
-        else{
-            m = generate_piece_request_message(piece_index);
-            send_message(m, new_socket);
-        }
-
-        bytes_read = read(new_socket, buffer.data(), 1024);
-        temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
-        m = Message::deserialize(temp);
-
-        {
-            std::lock_guard<std::mutex> lock(file_mutex);
-            bitfields[piece_index] = 1;
-        }
-    }
-
-    close(new_socket);
-    
     return ;
 }
 
@@ -412,7 +279,12 @@ void download_file(uint32_t filename){
     std::vector<uint8_t> buffer(1024);
     int bytes_read = read(client_fd, buffer.data(), 1023);
 
-    if(bytes_read == 4 && convert(buffer, 0) == 0){
+    if(bytes_read == 4 && convert(buffer, 0) == 2){
+        std::cout<<"Corrupt Message sent"<<std::endl;
+        close(client_fd);
+        return ;
+    }
+    else if(bytes_read == 4 && convert(buffer, 0) == 0){
         std::cout<<"No one has the file"<<std::endl;
         close(client_fd);
         return ;
@@ -452,40 +324,253 @@ void download_file(uint32_t filename){
     return ;
 }
 
-void optimistic_unchoking_protocol(){
+void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int socket, int uploading_id){
+    std::vector<uint8_t> buffer(1024);
+    std::vector<uint8_t> temp;
+
+    Message m = generate_bitfields_message(bitfields);
+    send_message(m, socket);
+
+    int bytes_read = read(socket, buffer.data(), 1024);
+    temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
+    bool check = validate_message(temp);
+    if(!check){
+        m = generate_close_message();
+        send_message(m, socket);
+        close(socket);
+        return ;
+    }
+    m = Message::deserialize(temp);
+    if(static_cast<int> (m.type) == 7 || static_cast<int> (m.type) == 7){
+        close(socket);
+        return ;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock1(uploaders_mutex);
+        std::lock_guard<std::mutex> lock2(download_speed_mutex);
+        std::lock_guard<std::mutex> lock3(is_choked_mutex);
+
+        uploaders.insert({0, uploading_id});
+        download_speed[uploading_id] = 0;
+        is_choked[uploading_id] = true;
+    }
+
     while(true){
         {
-            std::lock_guard<std::mutex> lock(is_choked_mutex);
-            for(auto i:is_choked){
-                if(i.second == true){
-                    i.second = false;
-                    break;
-                }
+            std::lock_guard<std::mutex> lock(uploading_mutex);
+
+            if(!uploading[filename]){
+                m = generate_close_message();
+                send_message(m, socket);
+                break;
             }
         }
-        std::this_thread::sleep_for(std::chrono::seconds(time2));
+
+        check = false;
+
+        {
+            std::lock_guard<std::mutex> lock(is_choked_mutex);
+
+            if(is_choked[uploading_id]){
+                Message m = generate_choke_message();
+                send_message(m, socket);
+                check = true;
+            }
+        }
+
+        if(check){
+            std::this_thread::sleep_for(std::chrono::seconds(time3));
+            continue;
+        }
+
+        m = generate_unchoke_message();
+        send_message(m, socket);
+
+        int bytes_read = read(socket, buffer.data(), 1024);
+        temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
+        check = validate_message(temp);
+        if(!check){
+            m = generate_close_message();
+            send_message(m, socket);
+            break;
+        }
+        m = Message::deserialize(temp);
+        if(static_cast<int>(m.type) == 7|| static_cast<int>(m.type) == 12)
+            break;
+
+        uint32_t piece_index = convert(m.payload, 0);
+        m = generate_piece_message(piece_index);
+        send_message(m, socket);
+
+        {
+            std::lock_guard<std::mutex> lock1(download_speed_mutex);
+            std::lock_guard<std::mutex> lock2(uploaders_mutex);
+
+            uploaders.erase(uploaders.find({download_speed[uploading_id], uploading_id}));
+            download_speed[uploading_id]++;
+            uploaders.insert({download_speed[uploading_id], uploading_id});
+        }
     }
+
+    {
+        std::lock_guard<std::mutex> lock1(uploaders_mutex);
+        std::lock_guard<std::mutex> lock2(download_speed_mutex);
+        std::lock_guard<std::mutex> lock3(is_choked_mutex);
+
+        uploaders.erase(uploaders.find({download_speed[uploading_id], uploading_id}));
+        download_speed.erase(download_speed.find(uploading_id));
+        is_choked.erase(is_choked.find(uploading_id));
+    }
+
+    close(socket);
 
     return ;
 }
 
-void choking_protocol(){
-    while(true){
-        {
-            std::lock_guard<std::mutex> lock(download_speed_mutex);
-            for(auto i:download_speed){
-                std::lock_guard<std::mutex> lock1(uploaders_mutex);
-                std::lock_guard<std::mutex> lock2(is_choked_mutex);
-
-                if(uploaders.order_of_key({i.second, i.first}) < max_unchoked)
-                    is_choked[i.first] = false;
-                else
-                    is_choked[i.first] = true;
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::seconds(time1));
+void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex, uint32_t filename, uint32_t port){
+    int new_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if(new_socket < 0){
+        perror("Socket Creation Failed!!!");
+        exit(EXIT_FAILURE);
     }
 
+    struct sockaddr_in server_address;
+    socklen_t server_address_len = sizeof(server_address);
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(port);
+    server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    int connect_status = connect(new_socket, (struct sockaddr*) &server_address, server_address_len);
+    if(connect_status < 0){
+        perror("Connection Failed!!!");
+        exit(EXIT_FAILURE);
+    }
+
+    std::vector<uint8_t> buffer(1024);
+    std::vector<std::uint8_t> temp;
+
+    Message m = generate_handshake_message();
+    send_message(m, new_socket);
+
+    int bytes_read = read(new_socket, buffer.data(), 1024);
+    temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
+    bool check = validate_message(temp);
+    if(!check){
+        m = generate_close_message();
+        send_message(m, new_socket);
+        close(new_socket);
+        return ;
+    }
+    m = Message::deserialize(temp);
+    if(static_cast<int> (m.type) == 12){
+        close(new_socket);
+        return ;
+    }
+
+    m = generate_file_request_message(filename);
+    send_message(m, new_socket);
+
+    bytes_read = read(new_socket, buffer.data(), 1024);
+    temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
+    check = validate_message(temp);
+    if(!check){
+        m = generate_close_message();
+        send_message(m, new_socket);
+        close(new_socket);
+        return ;
+    }
+    m = Message::deserialize(temp);
+    if(static_cast<int> (m.type) == 12){
+        close(new_socket);
+        return ;
+    }
+
+    std::vector<uint8_t> peer_bitfields = m.payload;
+
+    check = false;
+
+    for(int i=0;i<bitfields.size();i++){
+        std::lock_guard<std::mutex> lock(file_mutex);
+        if(static_cast<int> (bitfields[i]) == 0 && static_cast<int> (peer_bitfields[i]) == 1){
+            check = true;
+            break;
+        }
+    }
+
+    if(check){
+        m = generate_interested_message();
+        send_message(m, new_socket);
+    }
+    else{
+        m = generate_not_interested_message();
+        send_message(m, new_socket);
+        close(new_socket);
+        return ;
+    }
+    
+    while(true){
+        int bytes_read = read(new_socket, buffer.data(), 1024);
+        temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
+        check = validate_message(temp);
+        if(!check){
+            m = generate_close_message();
+            send_message(m, new_socket);
+            close(new_socket);
+            return ;
+        }
+        m = Message::deserialize(temp);
+        if(static_cast<int> (m.type) == 12){
+            close(new_socket);
+            return ;
+        }
+        if(static_cast<int> (m.type) == 8)
+            continue;
+
+        uint32_t piece_index = -1;
+
+        for(int i=0;i<bitfields.size();i++){
+            std::lock_guard<std::mutex> lock(file_mutex);
+            if(static_cast<int> (bitfields[i]) == 0 && static_cast<int> (peer_bitfields[i]) == 1){
+                piece_index = i;
+                bitfields[i] = 2;
+                break;
+            }
+        }
+
+        if(piece_index == (uint32_t)-1){
+            m = generate_not_interested_message();
+            send_message(m, new_socket);
+            break;
+        }
+        else{
+            m = generate_piece_request_message(piece_index);
+            send_message(m, new_socket);
+        }
+
+        bytes_read = read(new_socket, buffer.data(), 1024);
+        temp = std::vector<uint8_t> (buffer.begin(), buffer.begin() + bytes_read);
+        check = validate_message(temp);
+        if(!check){
+            m = generate_close_message();
+            send_message(m, new_socket);
+            close(new_socket);
+            return ;
+        }
+        m = Message::deserialize(temp);
+        if(static_cast<int> (m.type) == 12){
+            close(new_socket);
+            return ;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(file_mutex);
+            bitfields[piece_index] = 1;
+        }
+    }
+
+    close(new_socket);
+    
     return ;
 }
 

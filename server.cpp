@@ -15,8 +15,9 @@
 std::map<uint32_t, std::set<uint32_t>> database;
 std::mutex db_mutex;
 
-int success = 1;
 int error = 0;
+int success = 1;
+int courrpt = 2;
 
 void handle_file_upload(Message& m, int socket){
     uint32_t filename = convert(m.payload, 0);
@@ -72,8 +73,15 @@ void handle_request(int socket){
     std::vector<uint8_t> buffer(20);
     int bytes_read = read(socket, buffer.data(), 20);
     buffer.resize(bytes_read);
-    Message curr = Message::deserialize(buffer);
+    bool check = validate_message(buffer);
+    if(!check){
+        std::cout<<"Corrupted Message Reicieved"<<std::endl;
+        send(socket, &courrpt, sizeof(courrpt), 0);
+        close(socket);
+        return ;
+    }
 
+    Message curr = Message::deserialize(buffer);
     int type = static_cast<int>(curr.type);
     
     switch(type){
