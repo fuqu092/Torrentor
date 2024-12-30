@@ -7,10 +7,11 @@
 #include <iostream>
 #include <thread>
 #include <mutex>
+#include <atomic>
 
-typedef __gnu_pbds::tree<std::pair<int, int>, __gnu_pbds::null_type, std::greater_equal<std::pair<int,int>>, __gnu_pbds::rb_tree_tag, __gnu_pbds::tree_order_statistics_node_update> ordered_set;
+typedef __gnu_pbds::tree<std::pair<int, int>, __gnu_pbds::null_type, std::greater<std::pair<int,int>>, __gnu_pbds::rb_tree_tag, __gnu_pbds::tree_order_statistics_node_update> ordered_set;
 
-int pid = 0;
+std::atomic<int> pid{0};
 int time1 = 5;
 int time2 = 15;
 int time3 = 1;
@@ -21,10 +22,21 @@ ordered_set uploaders;
 std::map<int, bool> is_choked;
 std::map<int, int> download_speed;
 
+std::mutex mtx;
 std::mutex uploading_mutex;
-std::mutex uploaders_mutex;
-std::mutex is_choked_mutex;
-std::mutex download_speed_mutex;
+std::mutex cout_mutex;
+
+void safe_print(std::string msg){
+    std::lock_guard<std::mutex> lock(cout_mutex);
+    std::cout<<msg<<std::endl;
+    return ;
+}
+
+void log(int msg){
+    std::lock_guard<std::mutex> lock(cout_mutex);
+    std::cout<<"size of uploaders"<<msg<<std::endl;
+    return ;
+}
 
 void seed(uint32_t port);
 void choking_protocol();
@@ -138,21 +150,14 @@ void seed(uint32_t port){
 void choking_protocol(){
     while(true){
         {
-            std::lock_guard<std::mutex> lock(download_speed_mutex);
+            std::lock_guard<std::mutex> lock(mtx);
             for(auto i:download_speed){
-                bool check = false;
-                {
-                    std::lock_guard<std::mutex> lock(uploaders_mutex);
-                    if(uploaders.order_of_key({i.second, i.first}) < max_unchoked)
-                        check = false;
-                    else
-                        check = true;
-                }
-                {
-                    std::lock_guard<std::mutex> lock(is_choked_mutex);
-                    is_choked[i.first] = check;
-                }
+                if(uploaders.order_of_key({i.second, i.first}) < max_unchoked)
+                    is_choked[i.first] = false;
+                else
+                    is_choked[i.first] = true;
             }
+            // log((int)uploaders.size());
         }
         std::this_thread::sleep_for(std::chrono::seconds(time1));
     }
@@ -163,7 +168,7 @@ void choking_protocol(){
 void optimistic_unchoking_protocol(){
     while(true){
         {
-            std::lock_guard<std::mutex> lock(is_choked_mutex);
+            std::lock_guard<std::mutex> lock(mtx);
             for(auto it=is_choked.begin();it!=is_choked.end();it++){
                 if(it->second == true){
                     it->second = false;
@@ -205,13 +210,13 @@ void upload_file(uint32_t filename, uint32_t port){
     if(res == 1){
         std::lock_guard<std::mutex> lock(uploading_mutex);
         uploading[filename] = true;
-        std::cout<<"Server communicated about uploading file "<<filename<<std::endl;
-        std::cout<<"Started seeding file: "<<filename<<std::endl;
+        safe_print("Server communicated about uploading file " + filename);
+        safe_print("Started seeding file: " + filename);
     }
     else if(res == 2)
-        std::cout<<"Corrupt message sent"<<std::endl;
+        safe_print("Corrupt message sent");
     else
-        std::cout<<"Error in server"<<std::endl;
+        safe_print("Error in server");
 
     close(client_fd);
 
@@ -246,13 +251,13 @@ void delete_file(uint32_t filename, uint32_t port){
     if(res == 1){
         std::lock_guard<std::mutex> lock(uploading_mutex);
         uploading[filename] = false;
-        std::cout<<"Server communicated about not uploading file "<<filename<<std::endl;
-        std::cout<<"Stopped seeding file: "<<filename<<std::endl;
+        safe_print("Server communicated about not uploading file " + filename);
+        safe_print("Stopped seeding file: " + filename);
     }
     else if(res == 2)
-        std::cout<<"Corrupt message sent"<<std::endl;
+        safe_print("Corrupt message sent");
     else
-        std::cout<<"Error in server"<<std::endl;
+        safe_print("Error in server");
 
     close(client_fd);
 
@@ -285,19 +290,19 @@ void download_file(uint32_t filename){
     int bytes_read = read(client_fd, buffer.data(), 1023);
 
     if(bytes_read == 4 && convert(buffer, 0) == 2){
-        std::cout<<"Corrupt Message sent"<<std::endl;
+        safe_print("Corrupt Message sent");
         close(client_fd);
         return ;
     }
     else if(bytes_read == 4 && convert(buffer, 0) == 0){
-        std::cout<<"No one has the file"<<std::endl;
+        safe_print("No one has the file");
         close(client_fd);
         return ;
     }
 
     std::vector<uint32_t> peer_ports = get_peer_ports(buffer, bytes_read);
 
-    std::cout<<"Port retrieval complete"<<std::endl;
+    safe_print("Port retrieval complete");
 
     close(client_fd);
 
@@ -322,9 +327,9 @@ void download_file(uint32_t filename){
     }
 
     if(check)
-        std::cout<<"File: "<<filename<<" downloaded successfully."<<std::endl;
+        safe_print("File downloaded successfully: " + filename);
     else
-        std::cout<<"File: "<<filename<<" couldn't be downloaded."<<std::endl;
+        safe_print("File couldn't downloaded successfully: " + filename);
 
     return ;
 }
@@ -352,16 +357,11 @@ void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int sock
     }
 
     {
-        std::lock_guard<std::mutex> lock(uploaders_mutex);
+        std::lock_guard<std::mutex> lock(mtx);
         uploaders.insert({0, uploading_id});
-    }
-    {
-        std::lock_guard<std::mutex> lock(download_speed_mutex);
         download_speed[uploading_id] = 0;
-    }
-    {
-        std::lock_guard<std::mutex> lock(is_choked_mutex);
         is_choked[uploading_id] = true;
+        
     }
 
     while(true){
@@ -378,16 +378,13 @@ void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int sock
         check = false;
 
         {
-            std::lock_guard<std::mutex> lock(is_choked_mutex);
-
-            if(is_choked[uploading_id]){
-                Message m = generate_choke_message();
-                send_message(m, socket);
-                check = true;
-            }
+            std::lock_guard<std::mutex> lock(mtx);
+            check = is_choked[uploading_id];
         }
 
         if(check){
+            Message m = generate_choke_message();
+            send_message(m, socket);
             std::this_thread::sleep_for(std::chrono::seconds(time3));
             continue;
         }
@@ -404,7 +401,7 @@ void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int sock
             break;
         }
         m = Message::deserialize(temp);
-        if(static_cast<int>(m.type) == 7|| static_cast<int>(m.type) == 12)
+        if(static_cast<int>(m.type) == 7 || static_cast<int>(m.type) == 12)
             break;
 
         uint32_t piece_index = convert(m.payload, 0);
@@ -412,29 +409,17 @@ void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int sock
         send_message(m, socket);
 
         {
-            std::lock_guard<std::mutex> lock(uploaders_mutex);
+            std::lock_guard<std::mutex> lock(mtx);
             uploaders.erase(uploaders.find({download_speed[uploading_id], uploading_id}));
-        }
-        {
-            std::lock_guard<std::mutex> lock(download_speed_mutex);
             download_speed[uploading_id]++;
-        }
-        {
-            std::lock_guard<std::mutex> lock(uploaders_mutex);
             uploaders.insert({download_speed[uploading_id], uploading_id});
         }
     }
 
     {
-        std::lock_guard<std::mutex> lock(uploaders_mutex);
+        std::lock_guard<std::mutex> lock(mtx);
         uploaders.erase(uploaders.find({download_speed[uploading_id], uploading_id}));
-    }
-    {
-        std::lock_guard<std::mutex> lock(download_speed_mutex);
         download_speed.erase(download_speed.find(uploading_id));
-    }
-    {
-        std::lock_guard<std::mutex> lock(is_choked_mutex);
         is_choked.erase(is_choked.find(uploading_id));
     }
 
@@ -591,7 +576,7 @@ void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex,
 
 int main(){
     uint32_t port;
-    std::cout<<"Enter the port number: ";
+    safe_print("Enter the port number: ");
     std::cin>>port;
 
     std::thread t1(seed, port);
@@ -603,11 +588,11 @@ int main(){
 
     while(true){
         int choice;
-        std::cout<<"Press 1 to Upload a file, 2 to stop uploading a file and 3 for downloading a file, 4 to shutdown"<<std::endl;;
+        safe_print("Press 1 to Upload a file, 2 to stop uploading a file and 3 for downloading a file, 4 to shutdown");
         std::cin>>choice;
         if(choice == 1){
             uint32_t filename;
-            std::cout<<"Enter the file index: ";
+            safe_print("Enter the file index: ");
             std::cin>>filename;
             bool check = false;
             {
@@ -616,14 +601,14 @@ int main(){
                     check = true;
             }
             if(check){
-                std::cout<<"You are already uploading the file"<<std::endl;
+                safe_print("You are already uploading the file");
                 continue;
             }
             upload_file(filename, port);
         }
         else if(choice == 2){
             uint32_t filename;
-            std::cout<<"Enter the file index: ";
+            safe_print("Enter the file index: ");
             std::cin>>filename;
             bool check = false;
 
@@ -634,7 +619,7 @@ int main(){
             }
 
             if(check){
-                std::cout<<"You are not Uploading the file"<<std::endl;
+                safe_print("You are not Uploading the file");
                 continue;
             }
 
@@ -642,7 +627,7 @@ int main(){
         }
         else if(choice == 3){
             uint32_t filename;
-            std::cout<<"Enter the file index: ";
+            safe_print("Enter the file index: ");
             std::cin>>filename;
             std::thread t(download_file, filename);
             t.detach();
@@ -650,7 +635,7 @@ int main(){
         else if(choice == 4)
             break;
         else
-            std::cout<<"Enter a valid choice"<<std::endl;
+            safe_print("Enter a valid choice");
     }
 
     return 0;
