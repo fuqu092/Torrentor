@@ -13,11 +13,19 @@
 #define PORT 8080
 
 std::map<uint32_t, std::set<uint32_t>> database;
+
 std::mutex db_mutex;
+std::mutex cout_mutex;
 
 int error = 0;
 int success = 1;
 int courrpt = 2;
+
+void safe_print(std::string msg){
+    std::lock_guard<std::mutex> lock(cout_mutex);
+    std::cout<<msg<<std::endl;
+    return ;
+}
 
 void handle_file_upload(Message& m, int socket){
     uint32_t filename = convert(m.payload, 0);
@@ -75,7 +83,7 @@ void handle_request(int socket){
     buffer.resize(bytes_read);
     bool check = validate_message(buffer);
     if(!check){
-        std::cout<<"Corrupted Message Reicieved"<<std::endl;
+        safe_print("Corrupted Message Reicieved");
         send(socket, &courrpt, sizeof(courrpt), 0);
         close(socket);
         return ;
@@ -86,19 +94,19 @@ void handle_request(int socket){
     
     switch(type){
         case 0:
-            std::cout<<"Recieved a request for file upload"<<std::endl;
+            safe_print("Recieved a request for file upload");
             handle_file_upload(curr, socket);
-            std::cout<<"Completed request for file upload"<<std::endl;
+            safe_print("Completed request for file upload");
             break;
         case 1:
-            std::cout<<"Recieved a request for file delete"<<std::endl;
+            safe_print("Recieved a request for file delete");
             handle_file_delete(curr, socket);
-            std::cout<<"Completed request for file delete"<<std::endl;
+            safe_print("Completed request for file delete");
             break;
         case 2:
-            std::cout<<"Recieved a request for file download"<<std::endl;
+            safe_print("Recieved a request for file download");
             handle_file_download(curr, socket);
-            std::cout<<"Completed request for file download"<<std::endl;    
+            safe_print("Completed request for file download");
             break;
         default:
             send(socket, &error, sizeof(error), 0);
@@ -141,7 +149,7 @@ int main(){
         exit(EXIT_FAILURE);
     }
 
-    std::cout<<"Server Started"<<std::endl;
+    safe_print("Server Started");
 
     while(true){
         int new_socket = accept(server_fd, (struct sockaddr*) &address, &address_len);
