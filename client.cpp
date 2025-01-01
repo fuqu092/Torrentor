@@ -22,19 +22,15 @@ ordered_set uploaders;
 std::map<int, bool> is_choked;
 std::map<int, int> download_speed;
 
-std::mutex mtx;
 std::mutex uploading_mutex;
+std::mutex uploaders_mutex;
+std::mutex is_choked_mutex;
+std::mutex download_speed_mutex;
 std::mutex cout_mutex;
 
 void safe_print(std::string msg){
     std::lock_guard<std::mutex> lock(cout_mutex);
     std::cout<<msg<<std::endl;
-    return ;
-}
-
-void log(int msg){
-    std::lock_guard<std::mutex> lock(cout_mutex);
-    std::cout<<"size of uploaders"<<msg<<std::endl;
     return ;
 }
 
@@ -150,14 +146,14 @@ void seed(uint32_t port){
 void choking_protocol(){
     while(true){
         {
-            std::lock_guard<std::mutex> lock(mtx);
+            std::lock_guard<std::mutex> lock(download_speed_mutex);
             for(auto i:download_speed){
+                std::scoped_lock lock(uploaders_mutex, is_choked_mutex);
                 if(uploaders.order_of_key({i.second, i.first}) < max_unchoked)
                     is_choked[i.first] = false;
                 else
                     is_choked[i.first] = true;
             }
-            // log((int)uploaders.size());
         }
         std::this_thread::sleep_for(std::chrono::seconds(time1));
     }
@@ -168,7 +164,7 @@ void choking_protocol(){
 void optimistic_unchoking_protocol(){
     while(true){
         {
-            std::lock_guard<std::mutex> lock(mtx);
+            std::lock_guard<std::mutex> lock(is_choked_mutex);
             for(auto it=is_choked.begin();it!=is_choked.end();it++){
                 if(it->second == true){
                     it->second = false;
@@ -357,11 +353,16 @@ void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int sock
     }
 
     {
-        std::lock_guard<std::mutex> lock(mtx);
+        std::lock_guard<std::mutex> lock(uploaders_mutex);
         uploaders.insert({0, uploading_id});
+    }
+    {
+        std::lock_guard<std::mutex> lock(download_speed_mutex);
         download_speed[uploading_id] = 0;
+    }
+    {
+        std::lock_guard<std::mutex> lock(is_choked_mutex);
         is_choked[uploading_id] = true;
-        
     }
 
     while(true){
@@ -378,7 +379,7 @@ void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int sock
         check = false;
 
         {
-            std::lock_guard<std::mutex> lock(mtx);
+            std::lock_guard<std::mutex> lock(is_choked_mutex);
             check = is_choked[uploading_id];
         }
 
@@ -409,17 +410,30 @@ void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int sock
         send_message(m, socket);
 
         {
-            std::lock_guard<std::mutex> lock(mtx);
+            std::scoped_lock lock(download_speed_mutex, uploaders_mutex);
             uploaders.erase(uploaders.find({download_speed[uploading_id], uploading_id}));
+        }
+        {
+            std::lock_guard<std::mutex> lock(download_speed_mutex);
             download_speed[uploading_id]++;
+        }
+        {
+            std::scoped_lock lock(download_speed_mutex, uploaders_mutex);
             uploaders.insert({download_speed[uploading_id], uploading_id});
         }
+
     }
 
     {
-        std::lock_guard<std::mutex> lock(mtx);
+        std::scoped_lock lock(download_speed_mutex, uploaders_mutex);
         uploaders.erase(uploaders.find({download_speed[uploading_id], uploading_id}));
+    }
+    {
+        std::lock_guard<std::mutex> lock(download_speed_mutex);
         download_speed.erase(download_speed.find(uploading_id));
+    }
+    {
+        std::lock_guard<std::mutex> lock(is_choked_mutex);
         is_choked.erase(is_choked.find(uploading_id));
     }
 
