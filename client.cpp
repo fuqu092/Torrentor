@@ -11,6 +11,11 @@
 
 typedef __gnu_pbds::tree<std::pair<int, int>, __gnu_pbds::null_type, std::greater<std::pair<int,int>>, __gnu_pbds::rb_tree_tag, __gnu_pbds::tree_order_statistics_node_update> ordered_set;
 
+char server_ip[40];
+uint32_t server_port;
+uint32_t personal_ip;
+uint32_t personal_port; 
+
 std::atomic<int> pid{0};
 int time1 = 5;
 int time2 = 15;
@@ -34,16 +39,16 @@ void safe_print(std::string msg){
     return ;
 }
 
-void seed(uint32_t port);
+void seed();
 void choking_protocol();
 void optimistic_unchoking_protocol();
-void upload_file(uint32_t filename, uint32_t port);
-void delete_file(uint32_t filename, uint32_t port);
+void upload_file(uint32_t filename);
+void delete_file(uint32_t filename);
 void download_file(uint32_t filename);
 void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int socket, int uploading_id);
-void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex, uint32_t filename, uint32_t port);
+void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex, uint32_t filename, uint32_t addr, uint32_t port);
 
-void seed(uint32_t port){
+void seed(){
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if(server_fd < 0){
         perror("Socket Creation Failed!!!");
@@ -59,7 +64,7 @@ void seed(uint32_t port){
     struct sockaddr_in address;
     socklen_t address_len = sizeof(address);
     address.sin_family = AF_INET;
-    address.sin_port = htons(port);
+    address.sin_port = htons(personal_port);
     address.sin_addr.s_addr = INADDR_ANY;
 
     int bind_status = bind(server_fd, (struct sockaddr*) &address, address_len);
@@ -178,7 +183,7 @@ void optimistic_unchoking_protocol(){
     return ;
 }
 
-void upload_file(uint32_t filename, uint32_t port){
+void upload_file(uint32_t filename){
     int client_fd = socket(AF_INET, SOCK_STREAM, 0);
     if(client_fd < 0){
         perror("Socket Creation Failed!!!");
@@ -188,8 +193,8 @@ void upload_file(uint32_t filename, uint32_t port){
     struct sockaddr_in server_address;
     socklen_t server_address_len = sizeof(server_address);
     server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(8080);
-    server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_address.sin_port = htons(server_port);
+    server_address.sin_addr.s_addr = inet_addr(server_ip);
 
     int connect_status = connect(client_fd, (struct sockaddr*) &server_address, server_address_len);
     if(connect_status < 0){
@@ -197,7 +202,7 @@ void upload_file(uint32_t filename, uint32_t port){
         exit(EXIT_FAILURE);
     }
 
-    Message m = generate_upload_file_message(filename, port);
+    Message m = generate_upload_file_message(filename, personal_ip, personal_port);
     send_message(m, client_fd);
 
     int res;
@@ -219,7 +224,7 @@ void upload_file(uint32_t filename, uint32_t port){
     return ;
 }
 
-void delete_file(uint32_t filename, uint32_t port){
+void delete_file(uint32_t filename){
     int client_fd = socket(AF_INET, SOCK_STREAM, 0);
     if(client_fd < 0){
         perror("Socket Creation Failed!!!");
@@ -229,8 +234,8 @@ void delete_file(uint32_t filename, uint32_t port){
     struct sockaddr_in server_address;
     socklen_t server_address_len = sizeof(server_address);
     server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(8080);
-    server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_address.sin_port = htons(server_port);
+    server_address.sin_addr.s_addr = inet_addr(server_ip);
 
     int connect_status = connect(client_fd, (struct sockaddr*) &server_address, server_address_len);
     if(connect_status < 0){
@@ -238,7 +243,7 @@ void delete_file(uint32_t filename, uint32_t port){
         exit(EXIT_FAILURE);
     }
 
-    Message m = generate_delete_file_message(filename, port);
+    Message m = generate_delete_file_message(filename, personal_ip, personal_port);
     send_message(m, client_fd);
 
     int res;
@@ -270,8 +275,8 @@ void download_file(uint32_t filename){
     struct sockaddr_in server_address;
     socklen_t server_address_len = sizeof(server_address);
     server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(8080);
-    server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_address.sin_port = htons(server_port);
+    server_address.sin_addr.s_addr = inet_addr(server_ip);
 
     int connect_status = connect(client_fd, (struct sockaddr*) &server_address, server_address_len);
     if(connect_status < 0){
@@ -296,7 +301,7 @@ void download_file(uint32_t filename){
         return ;
     }
 
-    std::vector<uint32_t> peer_ports = get_peer_ports(buffer, bytes_read);
+    std::vector<std::pair<uint32_t,uint32_t>> peer_info = get_peer_info(buffer, bytes_read);
 
     safe_print("Port retrieval complete");
 
@@ -307,8 +312,8 @@ void download_file(uint32_t filename){
 
     std::vector<std::thread> downloaders;
     
-    for(auto i:peer_ports)
-        downloaders.push_back(std::thread(download_from_peer, std::ref(bitfields), std::ref(file_mutex), filename, i));
+    for(auto i:peer_info)
+        downloaders.push_back(std::thread(download_from_peer, std::ref(bitfields), std::ref(file_mutex), filename, i.first, i.second));
 
     for(auto& t:downloaders)
         t.join();
@@ -442,7 +447,7 @@ void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int sock
     return ;
 }
 
-void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex, uint32_t filename, uint32_t port){
+void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex, uint32_t filename, uint32_t peer_addr, uint32_t peer_port){
     int new_socket = socket(AF_INET, SOCK_STREAM, 0);
     if(new_socket < 0){
         perror("Socket Creation Failed!!!");
@@ -452,7 +457,7 @@ void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex,
     struct sockaddr_in server_address;
     socklen_t server_address_len = sizeof(server_address);
     server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(port);
+    server_address.sin_port = htons(peer_port);
     server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
 
     int connect_status = connect(new_socket, (struct sockaddr*) &server_address, server_address_len);
@@ -589,11 +594,18 @@ void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex,
 }
 
 int main(){
-    uint32_t port;
-    safe_print("Enter the port number: ");
-    std::cin>>port;
+    safe_print("Enter the server ip: ");
+    std::cin>>server_ip;
 
-    std::thread t1(seed, port);
+    safe_print("Enter the server port: ");
+    std::cin>>server_port;
+
+    safe_print("Enter the personal port number: ");
+    std::cin>>personal_port;
+
+    personal_ip = get_personal_ip();
+
+    std::thread t1(seed);
     std::thread t2(choking_protocol);
     std::thread t3(optimistic_unchoking_protocol);
     t1.detach();
@@ -618,7 +630,7 @@ int main(){
                 safe_print("You are already uploading the file");
                 continue;
             }
-            upload_file(filename, port);
+            upload_file(filename);
         }
         else if(choice == 2){
             uint32_t filename;
@@ -637,7 +649,7 @@ int main(){
                 continue;
             }
 
-            delete_file(filename, port);
+            delete_file(filename);
         }
         else if(choice == 3){
             uint32_t filename;

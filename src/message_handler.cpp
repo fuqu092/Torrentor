@@ -1,18 +1,20 @@
 #include "message_handler.h"
 #include <cstring>
 
-Message generate_upload_file_message(const uint32_t filename, const uint32_t port){
-    std::vector<uint8_t> payload(8);
+Message generate_upload_file_message(const uint32_t filename, const uint32_t addr, const uint32_t port){
+    std::vector<uint8_t> payload(12);
     std::memcpy(payload.data(), &filename, sizeof(filename));
-    std::memcpy(payload.data()+4, &port, sizeof(port));
+    std::memcpy(payload.data()+4, &addr, sizeof(addr));
+    std::memcpy(payload.data()+8, &port, sizeof(port));
     Message m(0, payload);
     return m;
 }
 
-Message generate_delete_file_message(const uint32_t filename, const uint32_t port){
-    std::vector<uint8_t> payload(8);
+Message generate_delete_file_message(const uint32_t filename, const uint32_t addr, const uint32_t port){
+    std::vector<uint8_t> payload(12);
     std::memcpy(payload.data(), &filename, sizeof(filename));
-    std::memcpy(payload.data()+4, &port, sizeof(port));
+    std::memcpy(payload.data()+4, &addr, sizeof(addr));
+    std::memcpy(payload.data()+8, &port, sizeof(port));
     Message m(1, payload);
     return m;
 }
@@ -143,13 +145,13 @@ bool validate_message(std::vector<uint8_t>& buffer){
 }
 
 bool validate_upload_file_message(std::vector<uint8_t>& buffer){
-    if(buffer.size() != 13)
+    if(buffer.size() != 17)
         return false;
     return true;
 }
 
 bool validate_delete_file_message(std::vector<uint8_t>& buffer){
-    if(buffer.size() != 13)
+    if(buffer.size() != 17)
         return false;
     return true;
 }

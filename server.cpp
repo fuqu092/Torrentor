@@ -9,10 +9,11 @@
 #include <mutex>
 #include <map>
 #include <set>
+#include <utility>
 
 #define PORT 8080
 
-std::map<uint32_t, std::set<uint32_t>> database;
+std::map<uint32_t, std::set<std::pair<uint32_t, uint32_t>>> database;
 
 std::mutex db_mutex;
 std::mutex cout_mutex;
@@ -29,10 +30,13 @@ void safe_print(std::string msg){
 
 void handle_file_upload(Message& m, int socket){
     uint32_t filename = convert(m.payload, 0);
-    uint32_t port = convert(m.payload, 4);
+    uint32_t addr = convert(m.payload, 4);
+    uint32_t port = convert(m.payload, 8);
 
-    std::lock_guard<std::mutex> lock(db_mutex);
-    database[filename].insert(port);
+    {
+        std::lock_guard<std::mutex> lock(db_mutex);
+        database[filename].insert({addr, port});
+    }
 
     send(socket, &success, sizeof(success), 0);
 
@@ -41,11 +45,14 @@ void handle_file_upload(Message& m, int socket){
 
 void handle_file_delete(Message& m, int socket){
     uint32_t filename = convert(m.payload, 0);
-    uint32_t port = convert(m.payload, 4);
+    uint32_t addr = convert(m.payload, 4);
+    uint32_t port = convert(m.payload, 8);
 
-    std::lock_guard<std::mutex> lock(db_mutex);
-    if(database[filename].find(port) != database[filename].end())
-        database[filename].erase(database[filename].find(port));
+    {
+        std::lock_guard<std::mutex> lock(db_mutex);
+        if(database[filename].find({addr, port}) != database[filename].end())
+            database[filename].erase(database[filename].find({addr, port}));
+    }
 
     send(socket, &success, sizeof(success), 0);
 
@@ -58,11 +65,12 @@ void handle_file_download(Message& m, int socket){
     std::vector<uint8_t> buffer;
     int j = 0;
     {
-        size_t required_size = 4 * database[filename].size();
-        buffer.resize(required_size);
         std::lock_guard<std::mutex> lock(db_mutex);
+        size_t required_size = 8 * database[filename].size();
+        buffer.resize(required_size);
         for(auto i:database[filename]){
-            std::memcpy(buffer.data() + 4 * j, &i, sizeof(i));
+            std::memcpy(buffer.data() + 8 * j, &(i.first), sizeof(i.first));
+            std::memcpy(buffer.data() + 8 * j + 4, &(i.second), sizeof(i.second));
             j++;
         }
     }
@@ -83,7 +91,7 @@ void handle_request(int socket){
     buffer.resize(bytes_read);
     bool check = validate_message(buffer);
     if(!check){
-        safe_print("Corrupted Message Reicieved");
+        safe_print("Corrupted Message Recieved");
         send(socket, &courrpt, sizeof(courrpt), 0);
         close(socket);
         return ;
