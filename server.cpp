@@ -13,7 +13,8 @@
 
 #define PORT 8080
 
-std::map<uint32_t, std::set<std::pair<uint32_t, uint32_t>>> database;
+std::map<std::string, std::set<std::pair<uint32_t, uint32_t>>> database;
+std::map<std::string, uint32_t> bitfields;
 
 std::mutex db_mutex;
 std::mutex cout_mutex;
@@ -29,13 +30,18 @@ void safe_print(std::string msg){
 }
 
 void handle_file_upload(Message& m, int socket){
-    uint32_t filename = convert(m.payload, 0);
-    uint32_t addr = convert(m.payload, 4);
-    uint32_t port = convert(m.payload, 8);
+    uint32_t num_bitfields = convert(m.payload, 0);
+    uint32_t filename_len = convert(m.payload, 4);
+    uint32_t addr = convert(m.payload, 8+filename_len);
+    uint32_t port = convert(m.payload, 12+filename_len);
+    std::string filename;
+    for(int i=0;i<filename_len;i++)
+        filename.push_back(static_cast<char>(m.payload[i+8]));
 
     {
         std::lock_guard<std::mutex> lock(db_mutex);
         database[filename].insert({addr, port});
+        bitfields[filename] = num_bitfields;
     }
 
     send(socket, &success, sizeof(success), 0);
@@ -44,14 +50,18 @@ void handle_file_upload(Message& m, int socket){
 }
 
 void handle_file_delete(Message& m, int socket){
-    uint32_t filename = convert(m.payload, 0);
-    uint32_t addr = convert(m.payload, 4);
-    uint32_t port = convert(m.payload, 8);
+    uint32_t filename_len = convert(m.payload, 0);
+    uint32_t addr = convert(m.payload, 4+filename_len);
+    uint32_t port = convert(m.payload, 8+filename_len);
+    std::string filename;
+    for(int i=0;i<filename_len;i++)
+        filename.push_back(static_cast<char>(m.payload[i+4]));
 
     {
         std::lock_guard<std::mutex> lock(db_mutex);
         if(database[filename].find({addr, port}) != database[filename].end())
             database[filename].erase(database[filename].find({addr, port}));
+        bitfields.erase(filename);
     }
 
     send(socket, &success, sizeof(success), 0);
@@ -60,13 +70,16 @@ void handle_file_delete(Message& m, int socket){
 }
 
 void handle_file_download(Message& m, int socket){
-    uint32_t filename = convert(m.payload, 0);
+    uint32_t filename_len = convert(m.payload, 0);
+    std::string filename;
+    for(int i=0;i<filename_len;i++)
+        filename.push_back(static_cast<char>(m.payload[i+4]));
 
     std::vector<uint8_t> buffer;
     int j = 0;
     {
         std::lock_guard<std::mutex> lock(db_mutex);
-        size_t required_size = 8 * database[filename].size();
+        size_t required_size = 8 * database[filename].size() + 4;
         buffer.resize(required_size);
         for(auto i:database[filename]){
             std::memcpy(buffer.data() + 8 * j, &(i.first), sizeof(i.first));
@@ -74,11 +87,11 @@ void handle_file_download(Message& m, int socket){
             j++;
         }
     }
-    
     if(buffer.size() == 0){
         send(socket, &error, sizeof(error), 0);
         return ;
     }
+    std::memcpy(buffer.data() + 8 * j, &(bitfields[filename]), sizeof(bitfields[filename]));
 
     send(socket, buffer.data(), buffer.size(), 0);
 
@@ -86,8 +99,8 @@ void handle_file_download(Message& m, int socket){
 }
 
 void handle_request(int socket){
-    std::vector<uint8_t> buffer(20);
-    int bytes_read = read(socket, buffer.data(), 20);
+    std::vector<uint8_t> buffer(1024);
+    int bytes_read = read(socket, buffer.data(), 1024);
     buffer.resize(bytes_read);
     bool check = validate_message(buffer);
     if(!check){

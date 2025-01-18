@@ -1,27 +1,40 @@
 #include "message_handler.h"
+#include "helper_functions.h"
 #include <cstring>
+#include <string>
+#include <iostream>
 
-Message generate_upload_file_message(const uint32_t filename, const uint32_t addr, const uint32_t port){
-    std::vector<uint8_t> payload(12);
-    std::memcpy(payload.data(), &filename, sizeof(filename));
-    std::memcpy(payload.data()+4, &addr, sizeof(addr));
-    std::memcpy(payload.data()+8, &port, sizeof(port));
+Message generate_upload_file_message(const std::string filename, const uint32_t num_bitfields, uint32_t addr, const uint32_t port){
+    int msg_len = 8 + filename.length() + 8;
+    uint32_t filename_len = filename.length();
+    std::vector<uint8_t> payload(msg_len);
+    std::memcpy(payload.data(), &num_bitfields, sizeof(num_bitfields));
+    std::memcpy(payload.data()+4, &filename_len, sizeof(filename_len));
+    std::memcpy(payload.data()+8, filename.c_str(), filename_len);
+    std::memcpy(payload.data()+8+filename_len, &addr, sizeof(addr));
+    std::memcpy(payload.data()+12+filename_len, &port, sizeof(port));
     Message m(0, payload);
     return m;
 }
 
-Message generate_delete_file_message(const uint32_t filename, const uint32_t addr, const uint32_t port){
-    std::vector<uint8_t> payload(12);
-    std::memcpy(payload.data(), &filename, sizeof(filename));
-    std::memcpy(payload.data()+4, &addr, sizeof(addr));
-    std::memcpy(payload.data()+8, &port, sizeof(port));
+Message generate_delete_file_message(const std::string filename, const uint32_t addr, const uint32_t port){
+    uint32_t msg_len = 4 + filename.length() + 8;
+    uint32_t filename_len = filename.length();
+    std::vector<uint8_t> payload(msg_len);
+    std::memcpy(payload.data(), &filename_len, sizeof(filename_len));
+    std::memcpy(payload.data()+4, filename.c_str(), filename_len);
+    std::memcpy(payload.data()+4+filename_len, &addr, sizeof(addr));
+    std::memcpy(payload.data()+8+filename_len, &port, sizeof(port));
     Message m(1, payload);
     return m;
 }
 
-Message generate_download_file_message(const uint32_t filename){
-    std::vector<uint8_t> payload(4);
-    std::memcpy(payload.data(), &filename, sizeof(filename));
+Message generate_download_file_message(const std::string filename){
+    uint32_t msg_len = 4 + filename.length();
+    uint32_t filename_len = filename.length();
+    std::vector<uint8_t> payload(msg_len);
+    std::memcpy(payload.data(), &filename_len, sizeof(filename_len));
+    std::memcpy(payload.data()+4, filename.c_str(), filename_len);
     Message m(2, payload);
     return m;
 }
@@ -31,9 +44,12 @@ Message generate_handshake_message(){
     return m;
 }
 
-Message generate_file_request_message(const uint32_t filename){
-    std::vector<uint8_t> payload(4);
-    std::memcpy(payload.data(), &filename, sizeof(filename));
+Message generate_file_request_message(const std::string filename){
+    uint32_t msg_len = 4 + filename.length();
+    uint32_t filename_len = filename.length();
+    std::vector<uint8_t> payload(msg_len);
+    std::memcpy(payload.data(), &filename_len, sizeof(filename_len));
+    std::memcpy(payload.data()+4, filename.c_str(), filename_len);
     Message m(4, payload);
     return m;
 }
@@ -145,19 +161,22 @@ bool validate_message(std::vector<uint8_t>& buffer){
 }
 
 bool validate_upload_file_message(std::vector<uint8_t>& buffer){
-    if(buffer.size() != 17)
+    uint32_t filename_len = convert(buffer, 9);
+    if(buffer.size() != 21 + filename_len)
         return false;
     return true;
 }
 
 bool validate_delete_file_message(std::vector<uint8_t>& buffer){
-    if(buffer.size() != 17)
+    uint32_t filename_len = convert(buffer, 5);
+    if(buffer.size() != 17 + filename_len)
         return false;
     return true;
 }
 
 bool validate_download_file_message(std::vector<uint8_t>& buffer){
-    if(buffer.size() != 9)
+    uint32_t filename_len = convert(buffer, 5);
+    if(buffer.size() != 9 + filename_len)
         return false;
     return true;
 }
@@ -169,7 +188,8 @@ bool validate_handshake_message(std::vector<uint8_t>& buffer){
 }
 
 bool validate_file_request_message(std::vector<uint8_t>& buffer){
-    if(buffer.size() != 9)
+    uint32_t filename_len = convert(buffer, 5);
+    if(buffer.size() != 9 + filename_len)
         return false;
     return true;
 }

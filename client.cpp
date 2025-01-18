@@ -7,9 +7,12 @@
 #include <iostream>
 #include <thread>
 #include <mutex>
+#include <fstream>
 #include <atomic>
 
 typedef __gnu_pbds::tree<std::pair<int, int>, __gnu_pbds::null_type, std::greater<std::pair<int,int>>, __gnu_pbds::rb_tree_tag, __gnu_pbds::tree_order_statistics_node_update> ordered_set;
+
+std::string download_path = "/mnt/c/Users/Lenovo/Downloads/";
 
 char server_ip[40];
 uint32_t server_port;
@@ -22,10 +25,11 @@ int time2 = 15;
 int time3 = 1;
 int max_unchoked = 3;
 
-std::map<uint32_t, bool> uploading;
+std::map<std::string, bool> uploading;
 ordered_set uploaders;
 std::map<int, bool> is_choked;
 std::map<int, int> download_speed;
+std::map<std::string, std::string> filepaths;
 
 std::mutex uploading_mutex;
 std::mutex uploaders_mutex;
@@ -42,11 +46,11 @@ void safe_print(std::string msg){
 void seed();
 void choking_protocol();
 void optimistic_unchoking_protocol();
-void upload_file(uint32_t filename);
-void delete_file(uint32_t filename);
-void download_file(uint32_t filename);
-void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int socket, int uploading_id);
-void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex, uint32_t filename, uint32_t addr, uint32_t port);
+void upload_file(std::string filename);
+void delete_file(std::string filename);
+void download_file(std::string filename);
+void upload_to_peer(std::string filename, int socket, int uploading_id);
+void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex, std::string filepath, std::string filename, uint32_t addr, uint32_t port);
 
 void seed(){
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -80,7 +84,6 @@ void seed(){
     }
 
     std::vector<uint8_t> buffer(1024);
-    std::vector<uint8_t> bitfields(100, 1);
 
     while(true){
         int new_socket = accept(server_fd, (struct sockaddr*) &address, &address_len);
@@ -122,7 +125,10 @@ void seed(){
             continue;
         }
 
-        uint32_t filename = convert(m.payload, 0);
+        uint32_t filename_len = convert(m.payload, 0);
+        std::string filename;
+        for(uint32_t i=0;i<filename_len;i++)
+            filename.push_back(static_cast<char>(m.payload[i+4]));
 
         check = false;
 
@@ -133,7 +139,7 @@ void seed(){
         }
 
         if(check){
-            std::thread t(upload_to_peer, std::ref(bitfields), filename, new_socket, pid++);
+            std::thread t(upload_to_peer, filename, new_socket, pid++);
             t.detach();
         }
         else{
@@ -183,7 +189,7 @@ void optimistic_unchoking_protocol(){
     return ;
 }
 
-void upload_file(uint32_t filename){
+void upload_file(std::string filepath, std::string filename){
     int client_fd = socket(AF_INET, SOCK_STREAM, 0);
     if(client_fd < 0){
         perror("Socket Creation Failed!!!");
@@ -202,7 +208,8 @@ void upload_file(uint32_t filename){
         exit(EXIT_FAILURE);
     }
 
-    Message m = generate_upload_file_message(filename, personal_ip, personal_port);
+    uint32_t num_bitfields = get_num_bitfields(filepath);
+    Message m = generate_upload_file_message(filename, num_bitfields, personal_ip, personal_port);
     send_message(m, client_fd);
 
     int res;
@@ -224,7 +231,7 @@ void upload_file(uint32_t filename){
     return ;
 }
 
-void delete_file(uint32_t filename){
+void delete_file(std::string filename){
     int client_fd = socket(AF_INET, SOCK_STREAM, 0);
     if(client_fd < 0){
         perror("Socket Creation Failed!!!");
@@ -265,7 +272,7 @@ void delete_file(uint32_t filename){
     return ;
 }
 
-void download_file(uint32_t filename){
+void download_file(std::string filename){
     int client_fd = socket(AF_INET, SOCK_STREAM, 0);
     if(client_fd < 0){
         perror("Socket Creation Failed!!!");
@@ -301,19 +308,23 @@ void download_file(uint32_t filename){
         return ;
     }
 
-    std::vector<std::pair<uint32_t,uint32_t>> peer_info = get_peer_info(buffer, bytes_read);
+    std::vector<std::pair<uint32_t,uint32_t>> peer_info = get_peer_info(buffer, bytes_read-4);
+    uint32_t num_bitfields = convert(buffer, bytes_read-4);
 
-    safe_print("Port retrieval complete");
+    safe_print("Peer info retrieval complete");
 
     close(client_fd);
 
-    std::vector<uint8_t> bitfields(100, 0);
+    std::vector<uint8_t> bitfields(num_bitfields, 0);
     std::mutex file_mutex;
 
     std::vector<std::thread> downloaders;
+
+    std::string filepath = download_path + filename;
+    std::ofstream file(filepath, std::ios::trunc);
     
     for(auto i:peer_info)
-        downloaders.push_back(std::thread(download_from_peer, std::ref(bitfields), std::ref(file_mutex), filename, i.first, i.second));
+        downloaders.push_back(std::thread(download_from_peer, std::ref(bitfields), std::ref(file_mutex), filepath, filename, i.first, i.second));
 
     for(auto& t:downloaders)
         t.join();
@@ -335,9 +346,10 @@ void download_file(uint32_t filename){
     return ;
 }
 
-void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int socket, int uploading_id){
+void upload_to_peer(std::string filename, int socket, int uploading_id){
     std::vector<uint8_t> buffer(1024);
     std::vector<uint8_t> temp;
+    std::vector<uint8_t> bitfields(get_num_bitfields(filepaths[filename]), 1);
 
     Message m = generate_bitfields_message(bitfields);
     send_message(m, socket);
@@ -411,7 +423,8 @@ void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int sock
             break;
 
         uint32_t piece_index = convert(m.payload, 0);
-        m = generate_piece_message(piece_index);
+        std::vector<uint8_t> piece_payload = generate_piece_payload(filepaths[filename], piece_index);
+        m = generate_piece_message(piece_index, piece_payload);
         send_message(m, socket);
 
         {
@@ -447,7 +460,7 @@ void upload_to_peer(std::vector<uint8_t>& bitfields, uint32_t filename, int sock
     return ;
 }
 
-void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex, uint32_t filename, uint32_t peer_addr, uint32_t peer_port){
+void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex, std::string filepath, std::string filename, uint32_t peer_addr, uint32_t peer_port){
     int new_socket = socket(AF_INET, SOCK_STREAM, 0);
     if(new_socket < 0){
         perror("Socket Creation Failed!!!");
@@ -458,7 +471,7 @@ void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex,
     socklen_t server_address_len = sizeof(server_address);
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(peer_port);
-    server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_address.sin_addr.s_addr = peer_addr;
 
     int connect_status = connect(new_socket, (struct sockaddr*) &server_address, server_address_len);
     if(connect_status < 0){
@@ -582,6 +595,8 @@ void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex,
             return ;
         }
 
+        write_to_file(filepath, piece_index, m);
+
         {
             std::lock_guard<std::mutex> lock(file_mutex);
             bitfields[piece_index] = 1;
@@ -594,6 +609,7 @@ void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex,
 }
 
 int main(){
+
     safe_print("Enter the server ip: ");
     std::cin>>server_ip;
 
@@ -617,9 +633,13 @@ int main(){
         safe_print("Press 1 to Upload a file, 2 to stop uploading a file and 3 for downloading a file, 4 to shutdown");
         std::cin>>choice;
         if(choice == 1){
-            uint32_t filename;
-            safe_print("Enter the file index: ");
+            std::string filepath;
+            std::string filename;
+            safe_print("Enter the filepath: ");
+            std::cin>>filepath;
+            safe_print("Enter the filename: ");
             std::cin>>filename;
+            filepaths[filename] = filename;
             bool check = false;
             {
                 std::lock_guard<std::mutex> lock(uploading_mutex);
@@ -630,11 +650,11 @@ int main(){
                 safe_print("You are already uploading the file");
                 continue;
             }
-            upload_file(filename);
+            upload_file(filepath, filename);
         }
         else if(choice == 2){
-            uint32_t filename;
-            safe_print("Enter the file index: ");
+            std::string filename;
+            safe_print("Enter the filename: ");
             std::cin>>filename;
             bool check = false;
 
@@ -652,8 +672,8 @@ int main(){
             delete_file(filename);
         }
         else if(choice == 3){
-            uint32_t filename;
-            safe_print("Enter the file index: ");
+            std::string filename;
+            safe_print("Enter the filename: ");
             std::cin>>filename;
             std::thread t(download_file, filename);
             t.detach();
