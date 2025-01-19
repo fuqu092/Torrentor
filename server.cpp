@@ -23,12 +23,6 @@ int error = 0;
 int success = 1;
 int courrpt = 2;
 
-void safe_print(std::string msg){
-    std::lock_guard<std::mutex> lock(cout_mutex);
-    std::cout<<msg<<std::endl;
-    return ;
-}
-
 void handle_file_upload(Message& m, int socket){
     uint32_t num_bitfields = convert(m.payload, 0);
     uint32_t filename_len = convert(m.payload, 4);
@@ -61,7 +55,8 @@ void handle_file_delete(Message& m, int socket){
         std::lock_guard<std::mutex> lock(db_mutex);
         if(database[filename].find({addr, port}) != database[filename].end())
             database[filename].erase(database[filename].find({addr, port}));
-        bitfields.erase(filename);
+        if(database[filename].size() == 0)
+            bitfields.erase(filename);
     }
 
     send(socket, &success, sizeof(success), 0);
@@ -104,7 +99,7 @@ void handle_request(int socket){
     buffer.resize(bytes_read);
     bool check = validate_message(buffer);
     if(!check){
-        safe_print("Corrupted Message Recieved");
+        safe_print("Corrupted Message Recieved", std::ref(cout_mutex));
         send(socket, &courrpt, sizeof(courrpt), 0);
         close(socket);
         return ;
@@ -115,19 +110,19 @@ void handle_request(int socket){
     
     switch(type){
         case 0:
-            safe_print("Recieved a request for file upload");
+            safe_print("Recieved a request for file upload", std::ref(cout_mutex));
             handle_file_upload(curr, socket);
-            safe_print("Completed request for file upload");
+            safe_print("Completed request for file upload", std::ref(cout_mutex));
             break;
         case 1:
-            safe_print("Recieved a request for file delete");
+            safe_print("Recieved a request for file delete", std::ref(cout_mutex));
             handle_file_delete(curr, socket);
-            safe_print("Completed request for file delete");
+            safe_print("Completed request for file delete", std::ref(cout_mutex));
             break;
         case 2:
-            safe_print("Recieved a request for file download");
+            safe_print("Recieved a request for file download", std::ref(cout_mutex));
             handle_file_download(curr, socket);
-            safe_print("Completed request for file download");
+            safe_print("Completed request for file download", std::ref(cout_mutex));
             break;
         default:
             send(socket, &error, sizeof(error), 0);
@@ -170,7 +165,7 @@ int main(){
         exit(EXIT_FAILURE);
     }
 
-    safe_print("Server Started");
+    safe_print("Server Started", std::ref(cout_mutex));
 
     while(true){
         int new_socket = accept(server_fd, (struct sockaddr*) &address, &address_len);

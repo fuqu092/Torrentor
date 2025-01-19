@@ -1,0 +1,40 @@
+Protcol Client to Server
+
+Uploading
+
+1. When a client wants to upload a certain file, it sends a message to server with filename, number of bitfields, its address and port in the order specified and it recieves a success message.
+Type 0 for this message.
+2. When it is shutting down, it must send another message to the server with each filename, its address and port and it recieves a success message.
+Type 1 for this message.
+3. Above must be done for every file.
+
+Downloading
+
+1. When a client want to download something, it sends msg to server to send clients with corresponding address.
+Type 2 for this message.
+2. Server replies with address and port of each peer with file available followed by number of bitfields.
+
+Protocol Client to Client
+
+1. Handshake message must be exchanged.
+Type 3 for handshake.
+2. Downloader sends file it needs to download.
+Type 4 for file request.
+3. Uploader responds with bitfields for the respective files.
+Type 5 for bitfields.
+4. Downloader decides if it is intrested or not, if not intrested connection is closed.
+Type 6 for intrested and 7 for not-intrested.
+5. Uploader sends either a choke or unchoke.
+Type 8 for choke and type 9 for unchoke.
+6. If Unchoked, downloader requests each uploader for a piece it doesn't have and hasn't requested yet.
+Type 10 for requests.
+7. Uploader send the content of the piece.
+Type 11 for piece content.
+8. Every request of downloader is fulfilled, if it needs to be choked by a uploader, it must be done when it has made no request to the corresponding peer.
+9. After every piece message a choke or unchoke message must be sent.
+
+Message Format
+4 bytes of length
+1 byte of type
+Payload
+length include (type + payload) length

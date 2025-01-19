@@ -37,12 +37,6 @@ std::mutex is_choked_mutex;
 std::mutex download_speed_mutex;
 std::mutex cout_mutex;
 
-void safe_print(std::string msg){
-    std::lock_guard<std::mutex> lock(cout_mutex);
-    std::cout<<msg<<std::endl;
-    return ;
-}
-
 void seed();
 void choking_protocol();
 void optimistic_unchoking_protocol();
@@ -218,13 +212,13 @@ void upload_file(std::string filepath, std::string filename){
     if(res == 1){
         std::lock_guard<std::mutex> lock(uploading_mutex);
         uploading[filename] = true;
-        safe_print("Server communicated about uploading file " + filename);
-        safe_print("Started seeding file: " + filename);
+        safe_print("Server communicated about uploading file " + filename, std::ref(cout_mutex));
+        safe_print("Started seeding file: " + filename, std::ref(cout_mutex));
     }
     else if(res == 2)
-        safe_print("Corrupt message sent");
+        safe_print("Corrupt message sent", std::ref(cout_mutex));
     else
-        safe_print("Error in server");
+        safe_print("Error in server", std::ref(cout_mutex));
 
     close(client_fd);
 
@@ -258,14 +252,14 @@ void delete_file(std::string filename){
 
     if(res == 1){
         std::lock_guard<std::mutex> lock(uploading_mutex);
-        uploading[filename] = false;
-        safe_print("Server communicated about not uploading file " + filename);
-        safe_print("Stopped seeding file: " + filename);
+        uploading.erase(filename);
+        safe_print("Server communicated about not uploading file " + filename, std::ref(cout_mutex));
+        safe_print("Stopped seeding file: " + filename, std::ref(cout_mutex));
     }
     else if(res == 2)
-        safe_print("Corrupt message sent");
+        safe_print("Corrupt message sent", std::ref(cout_mutex));
     else
-        safe_print("Error in server");
+        safe_print("Error in server", std::ref(cout_mutex));
 
     close(client_fd);
 
@@ -298,12 +292,12 @@ void download_file(std::string filename){
     int bytes_read = read(client_fd, buffer.data(), 1023);
 
     if(bytes_read == 4 && convert(buffer, 0) == 2){
-        safe_print("Corrupt Message sent");
+        safe_print("Corrupt Message sent", std::ref(cout_mutex));
         close(client_fd);
         return ;
     }
     else if(bytes_read == 4 && convert(buffer, 0) == 0){
-        safe_print("No one has the file");
+        safe_print("No one has the file", std::ref(cout_mutex));
         close(client_fd);
         return ;
     }
@@ -311,7 +305,7 @@ void download_file(std::string filename){
     std::vector<std::pair<uint32_t,uint32_t>> peer_info = get_peer_info(buffer, bytes_read-4);
     uint32_t num_bitfields = convert(buffer, bytes_read-4);
 
-    safe_print("Peer info retrieval complete");
+    safe_print("Peer info retrieval complete", std::ref(cout_mutex));
 
     close(client_fd);
 
@@ -339,9 +333,9 @@ void download_file(std::string filename){
     }
 
     if(check)
-        safe_print("File downloaded successfully: " + filename);
+        safe_print("File downloaded successfully: " + filename, std::ref(cout_mutex));
     else
-        safe_print("File couldn't downloaded successfully: " + filename);
+        safe_print("File couldn't downloaded successfully: " + filename, std::ref(cout_mutex));
 
     return ;
 }
@@ -609,14 +603,13 @@ void download_from_peer(std::vector<uint8_t>& bitfields, std::mutex& file_mutex,
 }
 
 int main(){
-
-    safe_print("Enter the server ip: ");
+    safe_print("Enter the server ip: ", std::ref(cout_mutex));
     std::cin>>server_ip;
 
-    safe_print("Enter the server port: ");
+    safe_print("Enter the server port: ", std::ref(cout_mutex));
     std::cin>>server_port;
 
-    safe_print("Enter the personal port number: ");
+    safe_print("Enter the personal port number: ", std::ref(cout_mutex));
     std::cin>>personal_port;
 
     personal_ip = get_personal_ip();
@@ -630,16 +623,17 @@ int main(){
 
     while(true){
         int choice;
-        safe_print("Press 1 to Upload a file, 2 to stop uploading a file and 3 for downloading a file, 4 to shutdown");
+        safe_print("Press 1 to Upload a file, 2 to stop uploading a file and 3 for downloading a file, 4 to shutdown", std::ref(cout_mutex));
         std::cin>>choice;
         if(choice == 1){
             std::string filepath;
             std::string filename;
-            safe_print("Enter the filepath: ");
+
+            safe_print("Enter the filepath: ", std::ref(cout_mutex));
             std::cin>>filepath;
-            safe_print("Enter the filename: ");
+            safe_print("Enter the filename: ", std::ref(cout_mutex));
             std::cin>>filename;
-            filepaths[filename] = filename;
+
             bool check = false;
             {
                 std::lock_guard<std::mutex> lock(uploading_mutex);
@@ -647,14 +641,17 @@ int main(){
                     check = true;
             }
             if(check){
-                safe_print("You are already uploading the file");
+                safe_print("You are already uploading the file", std::ref(cout_mutex));
                 continue;
             }
+
+            filepaths[filename] = filename;
+
             upload_file(filepath, filename);
         }
         else if(choice == 2){
             std::string filename;
-            safe_print("Enter the filename: ");
+            safe_print("Enter the filename: ", std::ref(cout_mutex));
             std::cin>>filename;
             bool check = false;
 
@@ -665,7 +662,7 @@ int main(){
             }
 
             if(check){
-                safe_print("You are not Uploading the file");
+                safe_print("You are not Uploading the file", std::ref(cout_mutex));
                 continue;
             }
 
@@ -673,15 +670,21 @@ int main(){
         }
         else if(choice == 3){
             std::string filename;
-            safe_print("Enter the filename: ");
+            safe_print("Enter the filename: ", std::ref(cout_mutex));
             std::cin>>filename;
+            
             std::thread t(download_file, filename);
             t.detach();
         }
         else if(choice == 4)
             break;
         else
-            safe_print("Enter a valid choice");
+            safe_print("Enter a valid choice", std::ref(cout_mutex));
+    }
+
+    for(auto i:uploading){
+        if(i.second)
+            delete_file(i.first);
     }
 
     return 0;

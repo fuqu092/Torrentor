@@ -90,3 +90,9 @@ void write_to_file(std::string filepath, uint32_t piece_index, Message m){
 
     file.close();
 }
+
+void safe_print(std::string msg, std::mutex& cout_mutex){
+    std::lock_guard<std::mutex> lock(cout_mutex);
+    std::cout<<msg<<std::endl;
+    return ;
+}

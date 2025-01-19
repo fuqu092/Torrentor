@@ -2,6 +2,7 @@
 #include "message.h"
 #include <stdint.h>
 #include <string>
+#include <mutex>
 
 uint32_t convert(std::vector<uint8_t>& payload, int j);
 
@@ -16,3 +17,5 @@ uint32_t get_num_bitfields(std::string filepath);
 std::vector<uint8_t> generate_piece_payload(std::string filepath, uint32_t piece_index);
 
 void write_to_file(std::string filepath, uint32_t piece_index, Message m);
+
+void safe_print(std::string msg, std::mutex& cout_mutex);
